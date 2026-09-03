@@ -1089,7 +1089,7 @@ class AppState: ObservableObject {
         }
         let file = SavedConfigFile(
             app: "SkillLocalizer",
-            version: "1.1.9",
+            version: "1.1.10",
             exportedAt: ISO8601DateFormatter().string(from: Date()),
             entries: entries
         )
@@ -1538,11 +1538,12 @@ struct ContentView: View {
 }
 
 struct AboutView: View {
+    @Environment(\.dismiss) private var dismiss
     var body: some View {
         VStack(spacing: 16) {
             Text("SkillLocalizer")
                 .font(.title)
-            Text("版本 1.1.9")
+            Text("版本 1.1.10")
                 .font(.subheadline)
                 .foregroundColor(.secondary)
             Text("将 WorkBuddy skill 的显示名与解释本地化为中文。")
@@ -1551,9 +1552,12 @@ struct AboutView: View {
                 .font(.caption)
                 .multilineTextAlignment(.center)
                 .foregroundColor(.secondary)
-            Text("MIT License · 由 半秋 维护")
+            Text("MIT License · Maintained by banqiu")
                 .font(.caption2)
                 .foregroundColor(.secondary)
+            Button("完成") { dismiss() }
+                .keyboardShortcut(.defaultAction)
+                .padding(.top, 6)
         }
         .padding(30)
         .frame(width: 420)

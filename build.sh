@@ -4,7 +4,7 @@
 set -e
 
 APP_NAME=SkillLocalizer
-VERSION=1.1.9
+VERSION=1.1.10
 MIN_MACOS=12.0
 ARCH=universal
 DMG_NAME="${MIN_MACOS}-${APP_NAME}-${VERSION}-${ARCH}.dmg"
