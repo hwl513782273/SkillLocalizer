@@ -26,7 +26,7 @@
 - 原生 SwiftUI / AppKit 单文件 App，拖入「应用程序」即用，**macOS 12+ 通用（arm64 + x86_64）**。
 
 ### 快速开始
-1. 在 Releases 下载 `12-SkillLocalizer-1.1.10-universal.dmg`（见下方「macOS 版本说明」）。
+1. 在 Releases 下载 `12-SkillLocalizer-1.1.15-universal.dmg`（见下方「macOS 版本说明」）。
 2. 打开 DMG，把 `SkillLocalizer.app` 拖入「应用程序」。
 3. 首次打开：右键 → 打开（或终端执行 `xattr -dr com.apple.quarantine /Applications/SkillLocalizer.app`）。
 4. 在「设置」里选翻译接口并填入对应 API Key，保存后即可批量 / 逐条翻译。
@@ -43,16 +43,16 @@ codesign --force --deep --sign - SkillLocalizer.app
 打包 DMG：
 ```bash
 hdiutil create -format UDZO -volname SkillLocalizer \
-  -srcfolder SkillLocalizer.app 12-SkillLocalizer-1.1.10-universal.dmg
+  -srcfolder SkillLocalizer.app 12-SkillLocalizer-1.1.15-universal.dmg
 ```
 （也可直接 `bash build.sh` 一步完成上面两步。）
 
 ### macOS 版本说明
-- **Apple Silicon + Intel 通用（推荐）**：下载 `12-SkillLocalizer-1.1.10-universal.dmg`，同时包含 arm64 + x86_64，macOS 12.0+ 通吃。
+- **Apple Silicon + Intel 通用（推荐）**：下载 `12-SkillLocalizer-1.1.15-universal.dmg`，同时包含 arm64 + x86_64，macOS 12.0+ 通吃。
 
 > 该 DMG 为 ad-hoc 签名、**未公证（notarized）**，首次打开请右键「打开」放行 Gatekeeper；在 Apple Silicon 上 Intel 版需通过 Rosetta 2 运行。源码经 `-target` 注入构建，零改动。
 
-> 仓库「发行版 / Releases」的命名格式为：`支持最低版本-SkillLocalizer-版本-架构`（如 `12-SkillLocalizer-1.1.10-universal.dmg`）。
+> 仓库「发行版 / Releases」的命名格式为：`支持最低版本-SkillLocalizer-版本-架构`（如 `12-SkillLocalizer-1.1.15-universal.dmg`）。
 
 ### 筛选与检测说明
 
@@ -96,7 +96,7 @@ hdiutil create -format UDZO -volname SkillLocalizer \
 - Native SwiftUI / AppKit single-file app — drag into Applications and it just works; **macOS 12+ universal (arm64 + x86_64)**.
 
 ### Quick start
-1. Download `12-SkillLocalizer-1.1.10-universal.dmg` from Releases (see "macOS build notes" below).
+1. Download `12-SkillLocalizer-1.1.15-universal.dmg` from Releases (see "macOS build notes" below).
 2. Open the DMG and drag `SkillLocalizer.app` into Applications.
 3. First launch: right-click → Open (or run `xattr -dr com.apple.quarantine /Applications/SkillLocalizer.app` in Terminal).
 4. In "设置 / Settings", pick a translation provider and enter its API Key; save, then batch / per-skill translate.
@@ -113,16 +113,16 @@ codesign --force --deep --sign - SkillLocalizer.app
 Build the DMG:
 ```bash
 hdiutil create -format UDZO -volname SkillLocalizer \
-  -srcfolder SkillLocalizer.app 12-SkillLocalizer-1.1.10-universal.dmg
+  -srcfolder SkillLocalizer.app 12-SkillLocalizer-1.1.15-universal.dmg
 ```
 (Or just run `bash build.sh` to do both in one step.)
 
 ### macOS build notes
-- **Apple Silicon + Intel (recommended)**: use `12-SkillLocalizer-1.1.10-universal.dmg` (contains both arm64 + x86_64, universal, macOS 12.0+).
+- **Apple Silicon + Intel (recommended)**: use `12-SkillLocalizer-1.1.15-universal.dmg` (contains both arm64 + x86_64, universal, macOS 12.0+).
 
 > This DMG is ad-hoc signed and **not notarized**; right-click "Open" on first launch to bypass Gatekeeper. The Intel build runs on Apple Silicon via Rosetta 2. Built from the same source via `-target` injection — zero source changes.
 
-> Release asset naming: `min-version-SkillLocalizer-version-arch` (e.g. `12-SkillLocalizer-1.1.10-universal.dmg`).
+> Release asset naming: `min-version-SkillLocalizer-version-arch` (e.g. `12-SkillLocalizer-1.1.15-universal.dmg`).
 
 ### Filter & detection reference
 

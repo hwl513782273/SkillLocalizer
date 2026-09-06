@@ -38,6 +38,8 @@ struct SkillItem: Identifiable, Equatable {
     var source: String = ""
     /// 该 skill 目录在本机创建(添加)的时间
     var addedDate: Date?
+    /// 该 skill 目录最后一次被修改(更新)的时间
+    var updatedDate: Date?
     /// 是否已请求“恢复此 skill 最初”，需点保存才真正执行。
     var pendingRestore: Bool = false
 
@@ -531,6 +533,26 @@ enum KeychainHelper {
 
 // MARK: - App State
 
+enum ListMode: String, CaseIterable, Identifiable {
+    case defaultOrder
+    case addedDateDesc
+    case updatedDateDesc
+    case onlyModified   // 仅看已改
+    case onlyUnmodified // 仅看未改
+    case onlyEnglish    // 仅看英文
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .defaultOrder: return "默认顺序"
+        case .addedDateDesc: return "添加时间↓"
+        case .updatedDateDesc: return "更新日期↓"
+        case .onlyModified: return "仅看已改"
+        case .onlyUnmodified: return "仅看未改"
+        case .onlyEnglish: return "仅看英文"
+        }
+    }
+}
+
 class AppState: ObservableObject {
     @Published var items: [SkillItem] = []
     @Published var search: String = ""
@@ -538,8 +560,7 @@ class AppState: ObservableObject {
     @Published var status: String = ""
     @Published var showAbout = false
     @Published var pendingRestoreAll: Bool = false
-    @Published var showOnlyModified = false
-    @Published var showOnlyEnglish = false
+    @Published var listMode: ListMode = .defaultOrder
     @Published var showSettings = false
 
     // 导入配置：确认弹窗状态 + 待应用的匹配项 + 跳过的无对应 skill 数
@@ -551,6 +572,9 @@ class AppState: ObservableObject {
 
     init() {
         SLSettings.migrateToPerProvider()
+        if ProcessInfo.processInfo.environment["OPEN_ABOUT"] != nil {
+            self.showAbout = true
+        }
     }
 
     func loadSkills() {
@@ -569,6 +593,7 @@ class AppState: ObservableObject {
             let fmParsed = parseFrontmatter(content)
             let dirName = dir.lastPathComponent
             let addedDate = (try? fm.attributesOfItem(atPath: dir.path))?[.creationDate] as? Date
+            let updatedDate = (try? fm.attributesOfItem(atPath: dir.path))?[.modificationDate] as? Date
             let writable = fm.isWritableFile(atPath: skillFile.path)
             let isBuiltin = dirName.contains("builtin") || skillFile.path.contains("builtin-skills")
             let isUserInstalled = !isBuiltin
@@ -629,7 +654,8 @@ class AppState: ObservableObject {
                 trueOrigDesc: trueOrigDesc,
                 trueOrigMetaName: trueOrigMeta,
                 source: detectSource(dirName: dirName),
-                addedDate: addedDate
+                addedDate: addedDate,
+                updatedDate: updatedDate
             )
             result.append(item)
         }
@@ -649,11 +675,31 @@ class AppState: ObservableObject {
                 $0.metaName?.lowercased().contains(q) ?? false
             }
         }
-        if showOnlyModified {
+        switch listMode {
+        case .onlyModified:
             list = list.filter { $0.modifiedFromOriginal || $0.hasChanges }
-        }
-        if showOnlyEnglish {
+        case .onlyUnmodified:
+            list = list.filter { !($0.modifiedFromOriginal || $0.hasChanges) }
+        case .onlyEnglish:
             list = list.filter { $0.hasEnglishDesc }
+        default:
+            break
+        }
+        switch listMode {
+        case .addedDateDesc:
+            list.sort { (a, b) -> Bool in
+                let ta = a.addedDate ?? Date.distantPast
+                let tb = b.addedDate ?? Date.distantPast
+                return ta > tb
+            }
+        case .updatedDateDesc:
+            list.sort { (a, b) -> Bool in
+                let ta = a.updatedDate ?? Date.distantPast
+                let tb = b.updatedDate ?? Date.distantPast
+                return ta > tb
+            }
+        default:
+            break
         }
         return list
     }
@@ -1083,33 +1129,96 @@ class AppState: ObservableObject {
     // MARK: - 导出/导入配置
 
     /// 导出当前已保存的本地化配置（各 skill 的 dir/name/desc）为 JSON 文件。建议「保存」后再导出，确保导出的就是磁盘真实状态。
+    /// 导出所有 skill：将 ~/.workbuddy/skills 下每个 skill 目录打包成一个 zip。
     func exportConfig() {
-        let entries: [SavedConfigEntry] = items.map {
-            SavedConfigEntry(dir: $0.dirName, name: $0.savedName, desc: $0.savedDesc)
+        let fm = FileManager.default
+        let base = ("~/.workbuddy/skills" as NSString).expandingTildeInPath
+        let skillsURL = URL(fileURLWithPath: base)
+        let dirs = (try? fm.contentsOfDirectory(at: skillsURL, includingPropertiesForKeys: nil, options: .skipsHiddenFiles))?
+            .filter { $0.hasDirectoryPath } ?? []
+        guard !dirs.isEmpty else {
+            status = "导出失败：没有可导出的 skill 目录。"
+            return
         }
-        let file = SavedConfigFile(
-            app: "SkillLocalizer",
-            version: "1.1.10",
-            exportedAt: ISO8601DateFormatter().string(from: Date()),
-            entries: entries
-        )
-        guard let data = try? JSONEncoder().encode(file) else {
-            status = "导出失败：无法编码配置。"
+        let tmp = fm.temporaryDirectory.appendingPathComponent("sl_export_\(UUID().uuidString)")
+        try? fm.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let zipName = "skilllocalizer-skills.zip"
+        let zipURL = tmp.appendingPathComponent(zipName)
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/zip")
+        proc.currentDirectoryURL = skillsURL
+        proc.arguments = ["-r", "-q", zipURL.path] + dirs.map { $0.lastPathComponent }
+        let errPipe = Pipe()
+        proc.standardError = errPipe
+        try? proc.run()
+        proc.waitUntilExit()
+        guard proc.terminationStatus == 0, fm.fileExists(atPath: zipURL.path) else {
+            let err = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            status = "导出失败：zip 打包错误 \(err)"
+            try? fm.removeItem(at: tmp)
             return
         }
         let panel = NSSavePanel()
-        panel.title = "导出本地化配置"
-        panel.nameFieldStringValue = "skilllocalizer-config.json"
-        panel.allowedContentTypes = [.json]
+        panel.title = "导出所有 skill"
+        panel.nameFieldStringValue = zipName
+        panel.allowedContentTypes = [.zip]
         panel.canCreateDirectories = true
         if panel.runModal() == .OK, let url = panel.url {
+            let saveURL = url.pathExtension.lowercased() == "zip" ? url : url.deletingPathExtension().appendingPathExtension("zip")
+            try? fm.removeItem(at: saveURL)
             do {
-                try data.write(to: url, options: .atomic)
-                status = "已导出 \(entries.count) 个 skill 的本地化配置到 \(url.lastPathComponent)。"
+                try fm.copyItem(at: zipURL, to: saveURL)
+                status = "已导出 \(dirs.count) 个 skill 为 zip 包：\(saveURL.lastPathComponent)。"
             } catch {
                 status = "导出失败：\(error.localizedDescription)"
             }
         }
+        try? fm.removeItem(at: tmp)
+    }
+
+    /// 导出单个 skill：将该 skill 目录打包成 zip。
+    func exportSkill(_ item: SkillItem) {
+        let fm = FileManager.default
+        let base = ("~/.workbuddy/skills" as NSString).expandingTildeInPath
+        let srcDir = URL(fileURLWithPath: base).appendingPathComponent(item.dirName)
+        guard fm.fileExists(atPath: srcDir.path) else {
+            status = "导出失败：找不到 skill 目录 \(item.dirName)。"
+            return
+        }
+        let tmp = fm.temporaryDirectory.appendingPathComponent("sl_export_\(UUID().uuidString)")
+        try? fm.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let zipName = "\(item.dirName).zip"
+        let zipURL = tmp.appendingPathComponent(zipName)
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/zip")
+        proc.currentDirectoryURL = URL(fileURLWithPath: base)
+        proc.arguments = ["-r", "-q", zipURL.path, item.dirName]
+        let errPipe = Pipe()
+        proc.standardError = errPipe
+        try? proc.run()
+        proc.waitUntilExit()
+        guard proc.terminationStatus == 0, fm.fileExists(atPath: zipURL.path) else {
+            let err = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            status = "导出失败：zip 打包错误 \(err)"
+            try? fm.removeItem(at: tmp)
+            return
+        }
+        let panel = NSSavePanel()
+        panel.title = "导出此 skill"
+        panel.nameFieldStringValue = zipName
+        panel.allowedContentTypes = [.zip]
+        panel.canCreateDirectories = true
+        if panel.runModal() == .OK, let url = panel.url {
+            let saveURL = url.pathExtension.lowercased() == "zip" ? url : url.deletingPathExtension().appendingPathExtension("zip")
+            try? fm.removeItem(at: saveURL)
+            do {
+                try fm.copyItem(at: zipURL, to: saveURL)
+                status = "已导出「\(item.dirName)」为 zip 包：\(saveURL.lastPathComponent)。"
+            } catch {
+                status = "导出失败：\(error.localizedDescription)"
+            }
+        }
+        try? fm.removeItem(at: tmp)
     }
 
     /// 导入本地化配置 JSON：按 dir 比对本地 skill，重合>0 弹确认窗（沿用 b15 保存才执行）。
@@ -1200,6 +1309,12 @@ struct SkillDetail: View {
                     }
                 }
 
+                HStack {
+                    Spacer()
+                    Button("导出此 skill") { state.exportSkill(item) }
+                        .font(.caption)
+                }
+
                 // 来源地址（该 skill 所在目录）
                 HStack(spacing: 4) {
                     Text("来源：")
@@ -1233,6 +1348,15 @@ struct SkillDetail: View {
                         .foregroundColor(.secondary)
                         .textSelection(.enabled)
                 }
+                HStack(spacing: 4) {
+                    Text("更新日期：")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text(item.updatedDate.map { $0.formatted(date: .abbreviated, time: .omitted) } ?? "未知")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .textSelection(.enabled)
+                }
 
                 HStack {
                     Spacer()
@@ -1258,6 +1382,12 @@ struct SkillDetail: View {
                             .font(.caption)
                             .foregroundColor(.secondary)
                         Spacer()
+                        Button(state.isTranslating ? "翻译中…" : "翻译此条") {
+                            state.translateOne(id: item.id) { _ in }
+                        }
+                        .font(.caption)
+                        .disabled(!item.writable || item.isBuiltin || item.trueOrigDesc.isEmpty || state.isTranslating)
+                        .help("把『最初原解释』翻译成中文填入下面的『中文解释』")
                         Button(justCopied ? "已复制 ✓" : "复制") { copyOriginalDesc() }
                             .font(.caption)
                             .disabled(item.trueOrigDesc.isEmpty)
@@ -1318,14 +1448,6 @@ struct SkillDetail: View {
                         .frame(height: 160)
                         .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color.secondary.opacity(0.25)))
                         .disabled(!item.writable || item.isBuiltin)
-                }
-                HStack {
-                    Button(state.isTranslating ? "翻译中…" : "翻译此条") {
-                        state.translateOne(id: item.id) { _ in }
-                    }
-                    .disabled(!item.writable || item.isBuiltin || item.trueOrigDesc.isEmpty || state.isTranslating)
-                    .help("把『最初原解释』翻译成中文填入上面的『中文解释』")
-                    Spacer()
                 }
 
                 VStack(alignment: .leading, spacing: 4) {
@@ -1399,13 +1521,22 @@ struct ContentView: View {
     var body: some View {
         HStack(spacing: 0) {
             VStack(spacing: 0) {
-                HStack {
-                    TextField("搜索 skill", text: $state.search)
-                        .textFieldStyle(RoundedBorderTextFieldStyle())
-                    Toggle("仅改", isOn: $state.showOnlyModified)
-                        .help("只看已修改")
-                    Toggle("英文", isOn: $state.showOnlyEnglish)
-                        .help("只看仍含英文解释的 skill")
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        TextField("搜索 skill", text: $state.search)
+                            .textFieldStyle(RoundedBorderTextFieldStyle())
+                        Spacer()
+                    }
+                    HStack {
+                        Picker("筛选/排序", selection: $state.listMode) {
+                            ForEach(ListMode.allCases) { opt in
+                                Text(opt.label).tag(opt)
+                            }
+                        }
+                        .pickerStyle(MenuPickerStyle())
+                        .help("默认顺序 / 按添加·更新时间降序 / 仅看已改·未改·英文")
+                        Spacer()
+                    }
                 }
                 .padding(8)
                 Divider()
@@ -1427,17 +1558,25 @@ struct ContentView: View {
                                 .font(.caption2)
                                 .foregroundColor(.red)
                         }
+                        Text(item.updatedDate.map { "更新 " + $0.formatted(date: .abbreviated, time: .omitted) } ?? "更新 未知")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
                     }
                     .tag(item.id)
                 }
                 .listStyle(SidebarListStyle())
-                if state.showOnlyEnglish && state.filteredItems.isEmpty {
+                if state.listMode == .onlyEnglish && state.filteredItems.isEmpty {
                     Text("（已全部本地化 ✓ 没有仍含英文的 skill）")
                         .font(.caption)
                         .foregroundColor(.secondary)
                         .padding(8)
-                } else if state.showOnlyModified && state.filteredItems.isEmpty {
+                } else if state.listMode == .onlyModified && state.filteredItems.isEmpty {
                     Text("（当前没有已改的 skill）")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .padding(8)
+                } else if state.listMode == .onlyUnmodified && state.filteredItems.isEmpty {
+                    Text("（当前没有未改的 skill）")
                         .font(.caption)
                         .foregroundColor(.secondary)
                         .padding(8)
@@ -1451,32 +1590,38 @@ struct ContentView: View {
             .frame(width: 260)
             Divider()
             VStack(spacing: 0) {
-                HStack {
-                    Text("接口：\(providerName)")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .padding(.trailing, 4)
-                    Button(state.isTranslating ? "翻译中…" : "批量翻译") {
-                        state.batchTranslate()
-                    }
-                    .disabled(state.isTranslating)
-                    Spacer()
-                    Button(state.pendingRestoreAll ? "取消全部恢复" : "全部恢复最初") {
-                        state.pendingRestoreAll.toggle()
-                    }
-                    .disabled(!state.items.contains { $0.writable && !$0.isBuiltin })
-                    if state.pendingRestoreAll {
-                        Text("⏳ 保存后生效")
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("接口：\(providerName)")
                             .font(.caption)
-                            .foregroundColor(.orange)
+                            .foregroundColor(.secondary)
+                            .padding(.trailing, 4)
+                        Button(state.isTranslating ? "翻译中…" : "批量翻译") {
+                            state.batchTranslate()
+                        }
+                        .disabled(state.isTranslating)
+                        Spacer()
+                        Button("设置") { state.showSettings = true }
+                        Button("关于") { state.showAbout = true }
                     }
-                    Button("保存") { state.doSave() }
-                        .disabled(!state.hasAnyChanges() && !state.pendingRestoreAll && !state.items.contains { $0.pendingRestore })
-                        .keyboardShortcut(.return, modifiers: .command)
-                    Button("关于") { state.showAbout = true }
-                    Button("设置") { state.showSettings = true }
-                    Button("导出配置") { state.exportConfig() }
-                    Button("导入配置") { state.importConfig() }
+                    HStack {
+                        Spacer()
+                        Button(state.pendingRestoreAll ? "取消全部恢复" : "全部恢复最初") {
+                            state.pendingRestoreAll.toggle()
+                        }
+                        .disabled(!state.items.contains { $0.writable && !$0.isBuiltin })
+                        if state.pendingRestoreAll {
+                            Text("⏳ 保存后生效")
+                                .font(.caption)
+                                .foregroundColor(.orange)
+                        }
+                        Button("导出所有 skill") { state.exportConfig() }
+                        Button("导入配置") { state.importConfig() }
+                        Button("导出配置") { state.exportConfig() }
+                        Button("保存") { state.doSave() }
+                            .disabled(!state.hasAnyChanges() && !state.pendingRestoreAll && !state.items.contains { $0.pendingRestore })
+                            .keyboardShortcut(.return, modifiers: .command)
+                    }
                 }
                 .padding(8)
                 HStack {
@@ -1543,7 +1688,7 @@ struct AboutView: View {
         VStack(spacing: 16) {
             Text("SkillLocalizer")
                 .font(.title)
-            Text("版本 1.1.10")
+            Text("版本 1.1.15")
                 .font(.subheadline)
                 .foregroundColor(.secondary)
             Text("将 WorkBuddy skill 的显示名与解释本地化为中文。")
